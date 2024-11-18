@@ -2,10 +2,9 @@ package controller
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 	"io"
 	"log"
 	"net/http"
@@ -18,6 +17,9 @@ import (
 	relayconstant "one-api/relay/constant"
 	"one-api/service"
 	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
 func relayHandler(c *gin.Context, relayMode int) *dto.OpenAIErrorWithStatusCode {
@@ -151,6 +153,15 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// 添加额外的 JSON 参数
+func addExtraJsonParam(requestBody []byte, key string, value interface{}) []byte {
+	var jsonData map[string]interface{}
+	json.Unmarshal(requestBody, &jsonData)
+	jsonData[key] = value
+	newRequestBody, _ := json.Marshal(jsonData)
+	return newRequestBody
+}
+
 func WssRelay(c *gin.Context) {
 	// 将 HTTP 连接升级为 WebSocket 连接
 
@@ -215,6 +226,23 @@ func relayRequest(c *gin.Context, relayMode int, channel *model.Channel) *dto.Op
 func wssRequest(c *gin.Context, ws *websocket.Conn, relayMode int, channel *model.Channel) *dto.OpenAIErrorWithStatusCode {
 	addUsedChannel(c, channel.Id)
 	requestBody, _ := common.GetRequestBody(c)
+
+	originalModel := c.GetString("original_model")
+
+	// 如果模型是gpt-4-gizmo开头，则对消息体进行修改
+	if strings.HasPrefix(originalModel, "gpt-4-gizmo") {
+		// 取得模型中gpt-4-gizmo字符串后面的内容
+		gizmo_id := strings.TrimPrefix(originalModel, "gpt-4-gizmo")
+		// 检查请求的 URL
+		if strings.Contains(c.Request.URL.Host, "gptapi.us") {
+			// 在请求体中增加额外的 JSON 参数
+			requestBody = addExtraJsonParam(requestBody, "conversation_mode", map[string]string{
+				"kind":     "gizmo_interaction",
+				"gizmo_id": gizmo_id,
+			})
+		}
+	}
+
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
 	return relay.WssHelper(c, ws)
 }
